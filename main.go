@@ -42,7 +42,7 @@ func main() {
 	}
 
 	ticker := time.NewTicker(1 * time.Second)
-
+	defer ticker.Stop()
 	go func() {
 		for range ticker.C {
 			root.Spawn(actor.PropsFromProducer(func() actor.Actor {
@@ -52,7 +52,6 @@ func main() {
 	}()
 
 	_, _ = console.ReadLine()
-	ticker.Stop()
 }
 
 type EchoActor struct {
