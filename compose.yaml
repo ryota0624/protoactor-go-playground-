@@ -1,14 +1,4 @@
 services:
-  jaeger:
-    image: jaegertracing/opentelemetry-all-in-one
-    ports:
-      - 16686:16686
-      - 55680:55680
-      - 14268:14268
-      - 43172:4317
-    environment:
-      COLLECTOR_OTLP_ENABLED: "true"
-
   otel-collector:
     image: otel/opentelemetry-collector-contrib
     restart: always
