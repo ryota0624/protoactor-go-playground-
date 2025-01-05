@@ -3,12 +3,20 @@ package main
 import (
 	"context"
 	"fmt"
+	"github.com/lmittmann/tint"
+	"go.opentelemetry.io/otel/exporters/otlp/otlptrace/otlptracegrpc"
+	"go.opentelemetry.io/otel/exporters/stdout/stdouttrace"
+	"go.opentelemetry.io/otel/propagation"
+	sdktrace "go.opentelemetry.io/otel/sdk/trace"
+	"go.opentelemetry.io/otel/trace"
 	"log"
+	"log/slog"
+	"os"
 	"time"
 
 	console "github.com/asynkron/goconsole"
 	"github.com/asynkron/protoactor-go/actor"
-	"github.com/asynkron/protoactor-go/actor/middleware/opentracing"
+	otelmiddleware "github.com/ryota0624/protoactor-go-playground/middleware/otel"
 	"go.opentelemetry.io/otel"
 	"go.opentelemetry.io/otel/exporters/otlp/otlpmetric/otlpmetricgrpc"
 	"go.opentelemetry.io/otel/exporters/stdout/stdoutmetric"
@@ -18,22 +26,29 @@ import (
 )
 
 func main() {
-	meterProvider, cleanup := SetUpMeterProvider()
+	meterProvider, traceProvider, cleanup := SetUpTelemetry()
 	defer func() {
 		for _, fn := range cleanup {
 			fn()
 		}
 	}()
-	config := actor.Configure(actor.WithMetricProviders(meterProvider))
-	sys := actor.NewActorSystemWithConfig(config)
-	root := actor.NewRootContext(sys, nil).WithSpawnMiddleware(opentracing.TracingMiddleware())
-	echoPid := root.Spawn(actor.PropsFromProducer(func() actor.Actor {
-		return &EchoActor{}
-	}))
 
-	f := root.RequestFuture(echoPid, Say{
-		message: "hello",
-	}, 3*time.Second)
+	config := actor.Configure(actor.WithMetricProviders(meterProvider), actor.WithLoggerFactory(func(system *actor.ActorSystem) *slog.Logger {
+		return createActorSystemLogger(system)
+	}))
+	sys := actor.NewActorSystemWithConfig(config)
+	sys.Extensions.Register(otelmiddleware.NewTraceExtension(traceProvider))
+	root := actor.NewRootContext(sys, nil).WithSenderMiddleware(otelmiddleware.SenderMiddleware()).WithSpawnMiddleware(otelmiddleware.TracingMiddleware(), otelmiddleware.SpawnMiddleware())
+	_, span := traceProvider.Tracer("echo-actor").Start(context.Background(), "two-echo")
+	echoPid := root.SpawnPrefix(actor.PropsFromProducer(func() actor.Actor {
+		return &EchoActor{}
+	}), "echo-actor")
+
+	f := root.RequestFuture(echoPid, otelmiddleware.WrapWithSpanMessage(
+		span, Say{
+			message: "hello",
+		},
+	), 3*time.Second)
 	success, err := f.Result()
 	if err != nil {
 		log.Printf("error: %v\n", err)
@@ -41,15 +56,18 @@ func main() {
 		fmt.Printf("response: %s\n", success.(SayResponse).message)
 	}
 
-	ticker := time.NewTicker(1 * time.Second)
-	defer ticker.Stop()
-	go func() {
-		for range ticker.C {
-			root.Spawn(actor.PropsFromProducer(func() actor.Actor {
-				return &EchoActor{}
-			}))
-		}
-	}()
+	f = root.RequestFuture(echoPid, otelmiddleware.WrapWithSpanMessage(
+		span, Say{
+			message: "world",
+		},
+	), 3*time.Second)
+	success, err = f.Result()
+	if err != nil {
+		log.Printf("error: %v\n", err)
+	} else {
+		fmt.Printf("response: %s\n", success.(SayResponse).message)
+	}
+	span.End()
 
 	_, _ = console.ReadLine()
 }
@@ -72,7 +90,7 @@ func (*EchoActor) Receive(context actor.Context) {
 	}
 }
 
-func SetUpMeterProvider() (*metric.MeterProvider, []func()) {
+func SetUpTelemetry() (*metric.MeterProvider, trace.TracerProvider, []func()) {
 
 	res, err := newResource("sample-app", "0.1.0")
 	if err != nil {
@@ -95,8 +113,19 @@ func SetUpMeterProvider() (*metric.MeterProvider, []func()) {
 		}
 	})
 
+	tp := newTraceExporter(err, res)
+	cleanup = append(cleanup, func() {
+		ctx := context.Background()
+
+		err := tp.Shutdown(ctx)
+		if err != nil {
+			log.Fatalf("failed to shutdown tracer provider: %v", err)
+		}
+	})
+	otel.SetTracerProvider(tp)
+	otel.SetTextMapPropagator(propagation.TraceContext{})
 	otel.SetMeterProvider(meterProvider)
-	return meterProvider, cleanup
+	return meterProvider, tp, cleanup
 }
 
 func newResource(serviceName, serviceVersion string) (*resource.Resource, error) {
@@ -124,10 +153,37 @@ func newMeterProvider(res *resource.Resource) (*metric.MeterProvider, error) {
 	meterProvider := metric.NewMeterProvider(
 		metric.WithResource(res),
 		metric.WithReader(
-			metric.NewPeriodicReader(grpc, metric.WithInterval(2*time.Second)),
+			metric.NewPeriodicReader(grpc, metric.WithInterval(30*time.Second)),
 		),
 		metric.WithReader(metric.NewPeriodicReader(metricExporter, metric.WithInterval(
-			2*time.Second))),
+			30*time.Second))),
 	)
 	return meterProvider, nil
+}
+
+func newTraceExporter(err error, res *resource.Resource) *sdktrace.TracerProvider {
+	traceExporter, err := otlptracegrpc.New(context.Background(), otlptracegrpc.WithInsecure())
+	if err != nil {
+		log.Fatalf("failed to create stdout trace exporter: %v", err)
+	}
+
+	traceConsoleExporter, err := stdouttrace.New()
+
+	tp := sdktrace.NewTracerProvider(
+		sdktrace.WithBatcher(traceExporter),
+		sdktrace.WithBatcher(traceConsoleExporter),
+		sdktrace.WithResource(res),
+	)
+
+	return tp
+}
+
+func createActorSystemLogger(system *actor.ActorSystem) *slog.Logger {
+	w := os.Stderr
+	// create a new logger
+	return slog.New(tint.NewHandler(w, &tint.Options{
+		Level:      slog.LevelDebug,
+		TimeFormat: time.Kitchen,
+	})).With("lib", "Proto.Actor").
+		With("system", system.ID)
 }

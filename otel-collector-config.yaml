@@ -9,10 +9,16 @@ exporters:
     endpoint: "0.0.0.0:8889"
   file:
     path: /dev/stdout
-
+  otlp/jaeger:
+    endpoint: jaeger:4317
+    tls:
+      insecure: true
 service:
   pipelines:
     metrics:
       receivers: [otlp]
-      exporters: [prometheus, file]
+      exporters: [prometheus]
+    traces:
+      receivers: [otlp]
+      exporters: [otlp/jaeger, file]
 
