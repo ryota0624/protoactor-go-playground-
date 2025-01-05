@@ -3,6 +3,7 @@ package main
 import (
 	"context"
 	"fmt"
+	"github.com/asynkron/protoactor-go/router"
 	"github.com/lmittmann/tint"
 	"go.opentelemetry.io/otel/exporters/otlp/otlptrace/otlptracegrpc"
 	"go.opentelemetry.io/otel/exporters/stdout/stdouttrace"
@@ -39,12 +40,18 @@ func main() {
 	sys := actor.NewActorSystemWithConfig(config)
 	sys.Extensions.Register(otelmiddleware.NewTraceExtension(traceProvider))
 	root := actor.NewRootContext(sys, nil).WithSenderMiddleware(otelmiddleware.SenderMiddleware()).WithSpawnMiddleware(otelmiddleware.TracingMiddleware(), otelmiddleware.SpawnMiddleware())
-	_, span := traceProvider.Tracer("echo-actor").Start(context.Background(), "two-echo")
-	echoPid := root.SpawnPrefix(actor.PropsFromProducer(func() actor.Actor {
-		return &EchoActor{}
-	}), "echo-actor")
+	_, span := traceProvider.Tracer("echo-actor").Start(context.Background(), "broadcast-echo")
 
-	f := root.RequestFuture(echoPid, otelmiddleware.WrapWithSpanMessage(
+	var echoPids []*actor.PID
+	for i := 0; i < 3; i++ {
+		echoPid := root.SpawnPrefix(actor.PropsFromProducer(func() actor.Actor {
+			return &EchoActor{}
+		}), "echo-actor")
+		echoPids = append(echoPids, echoPid)
+	}
+
+	echoActorBroadcast := root.SpawnPrefix(router.NewBroadcastGroup(echoPids...), "echo-actor-broadcast")
+	f := root.RequestFuture(echoActorBroadcast, otelmiddleware.WrapWithSpanMessage(
 		span, Say{
 			message: "hello",
 		},
@@ -56,17 +63,6 @@ func main() {
 		fmt.Printf("response: %s\n", success.(SayResponse).message)
 	}
 
-	f = root.RequestFuture(echoPid, otelmiddleware.WrapWithSpanMessage(
-		span, Say{
-			message: "world",
-		},
-	), 3*time.Second)
-	success, err = f.Result()
-	if err != nil {
-		log.Printf("error: %v\n", err)
-	} else {
-		fmt.Printf("response: %s\n", success.(SayResponse).message)
-	}
 	span.End()
 
 	_, _ = console.ReadLine()
