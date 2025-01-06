@@ -26,6 +26,12 @@ import (
 	semconv "go.opentelemetry.io/otel/semconv/v1.26.0"
 )
 
+func SpanAddedRootContext(sys *actor.ActorSystem, span trace.Span) *actor.RootContext {
+	return actor.NewRootContext(sys,
+		otelmiddleware.SpanContextMapFromSpanContext(span.SpanContext()),
+	).WithSenderMiddleware(otelmiddleware.SenderMiddleware()).WithSpawnMiddleware(otelmiddleware.TracingMiddleware(), otelmiddleware.SpawnMiddleware())
+}
+
 func main() {
 	meterProvider, traceProvider, cleanup := SetUpTelemetry()
 	defer func() {
@@ -39,7 +45,11 @@ func main() {
 	}))
 	sys := actor.NewActorSystemWithConfig(config)
 	sys.Extensions.Register(otelmiddleware.NewTraceExtension(traceProvider))
-	root := actor.NewRootContext(sys, nil).WithSenderMiddleware(otelmiddleware.SenderMiddleware()).WithSpawnMiddleware(otelmiddleware.TracingMiddleware(), otelmiddleware.SpawnMiddleware())
+	root := actor.NewRootContext(sys,
+		map[string]string{
+			"service": "echo-actor",
+		},
+	).WithSenderMiddleware(otelmiddleware.SenderMiddleware()).WithSpawnMiddleware(otelmiddleware.TracingMiddleware(), otelmiddleware.SpawnMiddleware())
 	_, span := traceProvider.Tracer("echo-actor").Start(context.Background(), "broadcast-echo")
 
 	var echoPids []*actor.PID
@@ -51,11 +61,10 @@ func main() {
 	}
 
 	echoActorBroadcast := root.SpawnPrefix(router.NewBroadcastGroup(echoPids...), "echo-actor-broadcast")
-	f := root.RequestFuture(echoActorBroadcast, otelmiddleware.WrapWithSpanMessage(
-		span, Say{
+	f := SpanAddedRootContext(sys, span).RequestFuture(echoActorBroadcast,
+		Say{
 			message: "hello",
-		},
-	), 3*time.Second)
+		}, 3*time.Second)
 	success, err := f.Result()
 	if err != nil {
 		log.Printf("error: %v\n", err)

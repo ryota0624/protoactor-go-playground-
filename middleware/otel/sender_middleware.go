@@ -17,6 +17,15 @@ func setSpanContextToEnvelope(spanCtx trace.SpanContext, envelope *actor.Message
 	envelope.SetHeader("trace-flags", fmt.Sprintf("%02x", byte(spanCtx.TraceFlags())))
 }
 
+func SpanContextMapFromSpanContext(spanCtx trace.SpanContext) map[string]string {
+	return map[string]string{
+		"parent-id":   spanCtx.SpanID().String(),
+		"trace-id":    spanCtx.TraceID().String(),
+		"tracestate":  spanCtx.TraceState().String(),
+		"trace-flags": fmt.Sprintf("%02x", byte(spanCtx.TraceFlags())),
+	}
+}
+
 func SenderMiddleware() actor.SenderMiddleware {
 	return func(next actor.SenderFunc) actor.SenderFunc {
 		return func(c actor.SenderContext, target *actor.PID, envelope *actor.MessageEnvelope) {
