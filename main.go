@@ -45,11 +45,7 @@ func main() {
 	}))
 	sys := actor.NewActorSystemWithConfig(config)
 	sys.Extensions.Register(otelmiddleware.NewTraceExtension(traceProvider))
-	root := actor.NewRootContext(sys,
-		map[string]string{
-			"service": "echo-actor",
-		},
-	).WithSenderMiddleware(otelmiddleware.SenderMiddleware()).WithSpawnMiddleware(otelmiddleware.TracingMiddleware(), otelmiddleware.SpawnMiddleware())
+	root := actor.NewRootContext(sys, nil).WithSenderMiddleware(otelmiddleware.SenderMiddleware()).WithSpawnMiddleware(otelmiddleware.TracingMiddleware(), otelmiddleware.SpawnMiddleware())
 	_, span := traceProvider.Tracer("echo-actor").Start(context.Background(), "broadcast-echo")
 
 	var echoPids []*actor.PID
@@ -61,11 +57,23 @@ func main() {
 	}
 
 	echoActorBroadcast := root.SpawnPrefix(router.NewBroadcastGroup(echoPids...), "echo-actor-broadcast")
-	f := SpanAddedRootContext(sys, span).RequestFuture(echoActorBroadcast,
+
+	f := root.Copy().WithHeaders(otelmiddleware.SpanContextMapFromSpanContext(span.SpanContext())).RequestFuture(echoActorBroadcast,
 		Say{
 			message: "hello",
 		}, 3*time.Second)
 	success, err := f.Result()
+	if err != nil {
+		log.Printf("error: %v\n", err)
+	} else {
+		fmt.Printf("response: %s\n", success.(SayResponse).message)
+	}
+
+	f = root.Copy().WithHeaders(otelmiddleware.SpanContextMapFromSpanContext(span.SpanContext())).RequestFuture(echoActorBroadcast,
+		Say{
+			message: "world",
+		}, 3*time.Second)
+	success, err = f.Result()
 	if err != nil {
 		log.Printf("error: %v\n", err)
 	} else {

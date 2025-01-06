@@ -29,14 +29,6 @@ func SpanContextMapFromSpanContext(spanCtx trace.SpanContext) map[string]string 
 func SenderMiddleware() actor.SenderMiddleware {
 	return func(next actor.SenderFunc) actor.SenderFunc {
 		return func(c actor.SenderContext, target *actor.PID, envelope *actor.MessageEnvelope) {
-			SenderReceiveWithSpanMessageMiddleware()(senderMiddleware()(next))(c, target, envelope)
-		}
-	}
-}
-
-func senderMiddleware() actor.SenderMiddleware {
-	return func(next actor.SenderFunc) actor.SenderFunc {
-		return func(c actor.SenderContext, target *actor.PID, envelope *actor.MessageEnvelope) {
 			c.Logger().Debug("INBOUND senderMiddleware", slog.Any("self", c.Self()), slog.Any("message", envelope.Message))
 
 			ctxWithParentSpan := context2.Background()
@@ -70,35 +62,6 @@ func senderMiddleware() actor.SenderMiddleware {
 			c.Logger().Debug("OUTBOUND Successfully injected", slog.Any("self", c.Self()), slog.Any("actor", c.Actor()), slog.Any("message", envelope.Message))
 			next(c, target, envelope)
 			span.End()
-		}
-	}
-}
-
-type WithSpanMessage[T any] struct {
-	Span    trace.Span
-	Message T
-}
-
-func WrapWithSpanMessage[T any](span trace.Span, message T) WithSpanMessage[any] {
-	return WithSpanMessage[any]{
-		Span:    span,
-		Message: message,
-	}
-}
-
-func SenderReceiveWithSpanMessageMiddleware() actor.SenderMiddleware {
-	return func(next actor.SenderFunc) actor.SenderFunc {
-		return func(c actor.SenderContext, target *actor.PID, envelope *actor.MessageEnvelope) {
-			c.Logger().Debug("INBOUND SenderReceiveWithSpanMessageMiddleware", slog.Any("self", c.Self()))
-
-			if withSpanMessage, ok := envelope.Message.(WithSpanMessage[any]); ok {
-				c.Logger().Debug("INBOUND WithSpanMessage", slog.Any("self", c.Self()))
-				envelope.Message = withSpanMessage.Message
-				setSpanContextToEnvelope(withSpanMessage.Span.SpanContext(), envelope)
-			} else {
-				c.Logger().Debug("INBOUND No WithSpanMessage", slog.Any("self", c.Self()))
-			}
-			next(c, target, envelope)
 		}
 	}
 }
