@@ -15,6 +15,10 @@ import (
 var ErrSpanContextNotFound = fmt.Errorf("spanContext not found")
 
 func spanContextFromMessageHeader(header actor.ReadonlyMessageHeader) (trace.SpanContext, error) {
+	if header == nil {
+		return trace.SpanContext{}, ErrSpanContextNotFound
+	}
+
 	gotSpanId, err := trace.SpanIDFromHex(header.Get("parent-id"))
 	if err != nil {
 		return trace.SpanContext{}, fmt.Errorf("failed to parse spanId: %v: %w", err, ErrSpanContextNotFound)

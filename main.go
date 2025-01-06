@@ -56,7 +56,7 @@ func main() {
 		echoPids = append(echoPids, echoPid)
 	}
 
-	echoActorBroadcast := root.SpawnPrefix(router.NewBroadcastGroup(echoPids...), "echo-actor-broadcast")
+	echoActorBroadcast := root.SpawnPrefix(router.NewBroadcastGroup(echoPids[0]), "echo-actor-broadcast")
 
 	f := root.Copy().WithHeaders(otelmiddleware.SpanContextMapFromSpanContext(span.SpanContext())).RequestFuture(echoActorBroadcast,
 		Say{
@@ -80,6 +80,17 @@ func main() {
 		fmt.Printf("response: %s\n", success.(SayResponse).message)
 	}
 
+	//f = root.Copy().WithHeaders(otelmiddleware.SpanContextMapFromSpanContext(span.SpanContext())).RequestFuture(echoActorBroadcast,
+	//	Say{
+	//		message: "world",
+	//	}, 3*time.Second)
+	//success, err = f.Result()
+	//if err != nil {
+	//	log.Printf("error: %v\n", err)
+	//} else {
+	//	fmt.Printf("response: %s\n", success.(SayResponse).message)
+	//}
+
 	span.End()
 
 	_, _ = console.ReadLine()
@@ -99,6 +110,19 @@ type SayResponse struct {
 func (*EchoActor) Receive(context actor.Context) {
 	switch msg := context.Message().(type) {
 	case Say:
+		if msg.message == "hello" {
+			//go func() {
+			<-time.NewTimer(1 * time.Second).C
+			pid, err := context.SpawnNamed(actor.PropsFromProducer(func() actor.Actor {
+				return &EchoActor{}
+			}), "child-echo-actor")
+			if err != nil {
+				log.Printf("error: %v\n", err)
+			}
+
+			context.Request(pid, Say{message: "world"})
+			//}()
+		}
 		context.Respond(SayResponse{message: msg.message})
 	}
 }

@@ -1,8 +1,6 @@
 package otel
 
 import (
-	context2 "context"
-	"fmt"
 	"sync"
 
 	"github.com/asynkron/protoactor-go/actor"
@@ -46,14 +44,5 @@ func clearActiveSpan(context actor.ReceiverContext) {
 }
 
 func GetActiveSpan(context actor.ReceiverContext) trace.Span {
-	span := getActiveSpan(context)
-	if span == nil {
-		ext := context.ActorSystem().Extensions.Get(extensionID).(*TraceExtension)
-		tracer := ext.Tracer()
-		_, span := tracer.Start(context2.Background(), fmt.Sprintf("%T/%T", context.Actor(), context.Message()))
-		setActiveSpan(context, span)
-		return span
-	}
-
-	return span
+	return getActiveSpan(context)
 }

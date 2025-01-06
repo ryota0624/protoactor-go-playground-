@@ -26,26 +26,31 @@ func SpanContextMapFromSpanContext(spanCtx trace.SpanContext) map[string]string 
 	}
 }
 
+func extractSpanContextFromSenderFuncArgs(c actor.SenderContext, envelope *actor.MessageEnvelope) (trace.SpanContext, error) {
+	fromCtxMessageHeader, err := spanContextFromMessageHeader(c.MessageHeader())
+	if !errors.Is(err, ErrSpanContextNotFound) {
+		return fromCtxMessageHeader, nil
+	}
+	return spanContextFromMessageHeader(envelope.Header)
+}
+
 func SenderMiddleware() actor.SenderMiddleware {
 	return func(next actor.SenderFunc) actor.SenderFunc {
 		return func(c actor.SenderContext, target *actor.PID, envelope *actor.MessageEnvelope) {
 			c.Logger().Debug("INBOUND senderMiddleware", slog.Any("self", c.Self()), slog.Any("message", envelope.Message))
 
 			ctxWithParentSpan := context2.Background()
-			spanContext, err := spanContextFromMessageHeader(envelope.Header)
-			if errors.Is(err, ErrSpanContextNotFound) {
-				c.Logger().Debug("INBOUND No spanContext found", slog.Any("self", c.Self()), slog.Any("error", err))
+
+			receiver, ok := c.(actor.ReceiverContext)
+			if ok {
+				activeSpan := GetActiveSpan(receiver)
+				ctxWithParentSpan = trace.ContextWithSpan(ctxWithParentSpan, activeSpan)
 			} else {
-				ctxWithParentSpan = trace.ContextWithSpanContext(ctxWithParentSpan, spanContext)
-			}
-			if !spanContext.IsValid() {
-				receiver, ok := c.(actor.ReceiverContext)
-				if ok {
-					ext := receiver.Get(ctxExtensionID).(*TraceCtxExtension)
-					activeSpan, ok := ext.activeSpan.Load(c.Self())
-					if ok {
-						ctxWithParentSpan = trace.ContextWithSpan(ctxWithParentSpan, activeSpan.(trace.Span))
-					}
+				spanContext, err := extractSpanContextFromSenderFuncArgs(c, envelope)
+				if errors.Is(err, ErrSpanContextNotFound) {
+					c.Logger().Debug("INBOUND No spanContext found", slog.Any("self", c.Self()), slog.Any("error", err))
+				} else {
+					ctxWithParentSpan = trace.ContextWithSpanContext(ctxWithParentSpan, spanContext)
 				}
 			}
 
