@@ -52,19 +52,15 @@ func ReceiverMiddleware() actor.ReceiverMiddleware {
 	return func(next actor.ReceiverFunc) actor.ReceiverFunc {
 		return func(c actor.ReceiverContext, envelope *actor.MessageEnvelope) {
 			traceExt := c.ActorSystem().Extensions.Get(extensionID).(*TraceExtension)
-			var ctxWithSpan context2.Context
-			if envelope.Header == nil {
-				ctxWithSpan = context2.Background()
-			} else {
+			ctxWithSpan := context2.Background()
+			if envelope.Header != nil {
 				spanContext, err := spanContextFromMessageHeader(envelope.Header)
 				if errors.Is(err, ErrSpanContextNotFound) {
 					c.Logger().Debug("INBOUND No spanContext found", slog.Any("self", c.Self()), slog.Any("error", err))
-					ctxWithSpan = context2.Background()
 				} else if err != nil {
-					c.Logger().Debug("INBOUND Error", slog.Any("self", c.Self()), slog.Any("error", err))
-					ctxWithSpan = context2.Background()
+					c.Logger().Debug("INBOUND Error extracting spanContext", slog.Any("self", c.Self()), slog.Any("error", err))
 				} else {
-					ctxWithSpan = trace.ContextWithSpanContext(context2.Background(), spanContext)
+					ctxWithSpan = trace.ContextWithSpanContext(ctxWithSpan, spanContext)
 				}
 			}
 			startSpan := func(suffix string) trace.Span {
@@ -78,28 +74,28 @@ func ReceiverMiddleware() actor.ReceiverMiddleware {
 			switch envelope.Message.(type) {
 			case *actor.Started:
 				span := startSpan("started")
+				defer span.End()
 				next(c, envelope)
-				span.End()
 				return
 			case *actor.Stopping:
 				span := startSpan("stopping")
+				defer span.End()
 				next(c, envelope)
 				span.End()
 				return
 			case *actor.Stopped:
 				span := startSpan("stopped")
+				defer span.End()
 				next(c, envelope)
-				span.End()
 				return
 			}
 
 			span := startSpan(fmt.Sprintf("%T", envelope.Message))
-			setActiveSpan(c, span)
 			defer func() {
-				c.Logger().Debug("INBOUND Finishing span", slog.Any("self", c.Self()), slog.Any("actor", c.Actor()), slog.Any("message", envelope.Message))
 				span.End()
 				clearActiveSpan(c)
 			}()
+			setActiveSpan(c, span)
 
 			next(c, envelope)
 		}

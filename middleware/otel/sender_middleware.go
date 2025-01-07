@@ -37,18 +37,20 @@ func extractSpanContextFromSenderFuncArgs(c actor.SenderContext, envelope *actor
 func SenderMiddleware() actor.SenderMiddleware {
 	return func(next actor.SenderFunc) actor.SenderFunc {
 		return func(c actor.SenderContext, target *actor.PID, envelope *actor.MessageEnvelope) {
-			c.Logger().Debug("INBOUND senderMiddleware", slog.Any("self", c.Self()), slog.Any("message", envelope.Message))
-
 			ctxWithParentSpan := context2.Background()
 
-			receiver, ok := c.(actor.ReceiverContext)
-			if ok {
-				activeSpan := GetActiveSpan(receiver)
+			var activeSpan trace.Span
+			if receiver, ok := c.(actor.ReceiverContext); ok {
+				activeSpan = GetActiveSpan(receiver)
 				ctxWithParentSpan = trace.ContextWithSpan(ctxWithParentSpan, activeSpan)
-			} else {
+			}
+
+			if activeSpan == nil {
 				spanContext, err := extractSpanContextFromSenderFuncArgs(c, envelope)
 				if errors.Is(err, ErrSpanContextNotFound) {
 					c.Logger().Debug("INBOUND No spanContext found", slog.Any("self", c.Self()), slog.Any("error", err))
+				} else if err != nil {
+					c.Logger().Error("INBOUND Error extracting spanContext", slog.Any("self", c.Self()), slog.Any("error", err))
 				} else {
 					ctxWithParentSpan = trace.ContextWithSpanContext(ctxWithParentSpan, spanContext)
 				}
