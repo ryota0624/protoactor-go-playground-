@@ -45,6 +45,7 @@ func spanContextFromMessageHeader(header actor.ReadonlyMessageHeader) (trace.Spa
 			TraceID:    gotTraceId,
 			TraceState: tracestate,
 			TraceFlags: trace.TraceFlags(traceFlags[0]),
+			Remote:     true,
 		}), nil
 }
 
