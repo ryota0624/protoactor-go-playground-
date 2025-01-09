@@ -113,11 +113,11 @@ func newTraceExporter(err error, res *resource.Resource) *sdktrace.TracerProvide
 	return tp
 }
 
-func CreateActorSystemLogger(system *actor.ActorSystem) *slog.Logger {
+func CreateActorSystemLogger(system *actor.ActorSystem, level slog.Level) *slog.Logger {
 	w := os.Stderr
 	// create a new logger
 	return slog.New(tint.NewHandler(w, &tint.Options{
-		Level:      slog.LevelDebug,
+		Level:      level,
 		TimeFormat: time.Kitchen,
 	})).With("lib", "Proto.Actor").
 		With("system", system.ID)

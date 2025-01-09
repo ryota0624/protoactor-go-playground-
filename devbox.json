@@ -1,9 +1,13 @@
 {
-  "$schema":  "https://raw.githubusercontent.com/jetify-com/devbox/0.13.7/.schema/devbox.schema.json",
-  "packages": ["buf@latest"],
+  "$schema": "https://raw.githubusercontent.com/jetify-com/devbox/0.13.7/.schema/devbox.schema.json",
+  "packages": [
+    "buf@latest",
+    "go@1.23.1"
+  ],
   "shell": {
     "init_hook": [
-      "echo 'Welcome to devbox!' > /dev/null"
+      "echo 'Welcome to devbox!' > /dev/null",
+      "go install github.com/asynkron/protoactor-go/protobuf/protoc-gen-go-grain@latest"
     ],
     "scripts": {
       "test": [

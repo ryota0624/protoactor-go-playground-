@@ -4,7 +4,11 @@ import (
 	"context"
 	console "github.com/asynkron/goconsole"
 	"github.com/asynkron/protoactor-go/actor"
+	"github.com/asynkron/protoactor-go/cluster"
+	"github.com/asynkron/protoactor-go/cluster/clusterproviders/automanaged"
 	"github.com/asynkron/protoactor-go/remote"
+
+	"github.com/asynkron/protoactor-go/cluster/identitylookup/disthash"
 	playground "github.com/ryota0624/protoactor-go-playground"
 	otelmiddleware "github.com/ryota0624/protoactor-go-playground/middleware/otel"
 	"github.com/ryota0624/protoactor-go-playground/proto/gen/echo"
@@ -18,6 +22,11 @@ import (
 )
 
 func main() {
+	echo.EchoFactory(func() echo.Echo {
+		log.Printf("echo actor created\n")
+		return &playground.EchoActor{}
+	})
+
 	meterProvider, traceProvider, cleanup := playground.SetUpTelemetry()
 	defer func() {
 		for _, fn := range cleanup {
@@ -26,7 +35,7 @@ func main() {
 	}()
 
 	config := actor.Configure(actor.WithMetricProviders(meterProvider), actor.WithLoggerFactory(func(system *actor.ActorSystem) *slog.Logger {
-		return playground.CreateActorSystemLogger(system, slog.LevelDebug)
+		return playground.CreateActorSystemLogger(system, slog.LevelInfo)
 	}))
 	sys := actor.NewActorSystemWithConfig(config)
 	sys.Extensions.Register(otelmiddleware.NewTraceExtension(traceProvider))
@@ -48,19 +57,58 @@ func main() {
 			),
 		}),
 	)
-	rt := remote.NewRemote(sys, remoteConfig)
-	rt.Start()
-	defer rt.Shutdown(true)
+
+	clusterConfig := cluster.Configure("echo-cluster", automanaged.NewWithConfig(5*time.Second,
+		port+100, "127.0.0.1:9101", "127.0.0.1:8989",
+	), disthash.New(), remoteConfig, cluster.WithKinds(echo.GetEchoKind()))
+	c := cluster.New(sys, clusterConfig)
+	c.StartMember()
+	defer c.Shutdown(true)
+
+	for {
+		if c.MemberList.Length() > 1 {
+
+			break
+		}
+		log.Printf("waiting for cluster to form...\n")
+		time.Sleep(1 * time.Second)
+	}
+
+	echoClient := echo.GetEchoGrainClient(c, "echo-actor-grain-1")
+	echoGrainResponse, err := echoClient.SayMessage(&echo.Say{
+		Message: "hello grain1",
+	})
+
+	if err != nil {
+		log.Printf("error: %v\n", err)
+	} else {
+		log.Printf("response from echo-actor-grain-1: %v\n", echoGrainResponse.Message)
+	}
+
+	helloGrainResponse, err := c.RequestFuture("echo-actor-grain-2", echo.GetEchoKind().Kind, &echo.Say{
+		Message: "hello grain2",
+	})
+
+	if err != nil {
+		log.Printf("error: %v\n", err)
+	} else {
+		response, err := helloGrainResponse.Result()
+		if err != nil {
+			log.Printf("error: %v\n", err)
+		} else {
+			log.Printf("response from echo-actor-grain-2: %v\n", response)
+		}
+	}
 
 	rootContext := actor.NewRootContext(sys, nil).WithSenderMiddleware(otelmiddleware.SenderMiddleware()).WithSpawnMiddleware(otelmiddleware.TracingMiddleware(), otelmiddleware.SpawnMiddleware())
-	_, err = rt.SpawnNamed("127.0.0.1:8889", "echo-actor-1", "echo-actor", 5*time.Second)
+	_, err = c.Remote.SpawnNamed("127.0.0.1:8889", "echo-actor-1", "echo-actor", 5*time.Second)
 	if err != nil {
 		log.Printf("error: %v\n", err)
 	}
 
 	echoActorPidResponse, err := rootContext.Copy().WithHeaders(
 		otelmiddleware.SpanContextMapFromSpanContext(span.SpanContext()),
-	).RequestFuture(rt.ActivatorForAddress("127.0.0.1:8889"), &remote.ActorPidRequest{
+	).RequestFuture(c.Remote.ActivatorForAddress("127.0.0.1:8889"), &remote.ActorPidRequest{
 		Kind: "echo-actor",
 		Name: "echo-actor-1",
 	}, 5*time.Second).Result()

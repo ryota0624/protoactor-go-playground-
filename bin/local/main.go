@@ -23,7 +23,7 @@ func main() {
 	}()
 
 	config := actor.Configure(actor.WithMetricProviders(meterProvider), actor.WithLoggerFactory(func(system *actor.ActorSystem) *slog.Logger {
-		return playground.CreateActorSystemLogger(system)
+		return playground.CreateActorSystemLogger(system, slog.LevelDebug)
 	}))
 	sys := actor.NewActorSystemWithConfig(config)
 	sys.Extensions.Register(otelmiddleware.NewTraceExtension(traceProvider))

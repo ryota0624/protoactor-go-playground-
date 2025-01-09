@@ -9,3 +9,7 @@ message Say {
 message SayResponse {
   string message = 1;
 }
+
+service Echo {
+  rpc SayMessage(Say) returns (SayResponse) {}
+}
