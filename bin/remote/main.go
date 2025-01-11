@@ -8,6 +8,7 @@ import (
 	playground "github.com/ryota0624/protoactor-go-playground"
 	otelmiddleware "github.com/ryota0624/protoactor-go-playground/middleware/otel"
 	"github.com/ryota0624/protoactor-go-playground/proto/gen/echo"
+	"go.opentelemetry.io/otel"
 	"log"
 	"log/slog"
 	"os"
@@ -18,10 +19,19 @@ import (
 )
 
 func main() {
-	meterProvider, traceProvider, cleanup := playground.SetUpTelemetry()
+	resource, err := playground.NewResource("sample-app", "0.1.0", "TODO")
+	if err != nil {
+		log.Fatalf("failed to create resource: %v", err)
+	}
+	meterProvider, traceProvider := playground.SetUpTelemetry(resource)
 	defer func() {
-		for _, fn := range cleanup {
-			fn()
+		err := meterProvider.Shutdown(context.Background())
+		if err != nil {
+			log.Printf("failed to shutdown meter provider: %v\n", err)
+		}
+		err = traceProvider.Shutdown(context.Background())
+		if err != nil {
+			log.Printf("failed to shutdown trace provider: %v\n", err)
 		}
 	}()
 
@@ -30,6 +40,8 @@ func main() {
 	}))
 	sys := actor.NewActorSystemWithConfig(config)
 	sys.Extensions.Register(otelmiddleware.NewTraceExtension(traceProvider))
+	otel.SetTracerProvider(traceProvider)
+	otel.SetMeterProvider(meterProvider)
 
 	_, span := traceProvider.Tracer("echo-actor").Start(context.Background(), "remote-echo")
 	defer span.End()
@@ -44,7 +56,7 @@ func main() {
 			Props: actor.PropsFromProducer(func() actor.Actor {
 				return &playground.EchoActor{}
 			}).Configure(
-				otelmiddleware.TracingPropsOptions()...,
+				actor.WithContextDecorator(otelmiddleware.ContextDecorator()),
 			),
 		}),
 	)
@@ -52,7 +64,7 @@ func main() {
 	rt.Start()
 	defer rt.Shutdown(true)
 
-	rootContext := actor.NewRootContext(sys, nil).WithSenderMiddleware(otelmiddleware.SenderMiddleware()).WithSpawnMiddleware(otelmiddleware.TracingMiddleware(), otelmiddleware.SpawnMiddleware())
+	rootContext := actor.NewRootContext(sys, nil).WithSenderMiddleware(otelmiddleware.RootContextSenderMiddleware()).WithSpawnMiddleware(otelmiddleware.RootContextSpawnMiddleware())
 	_, err = rt.SpawnNamed("127.0.0.1:8889", "echo-actor-1", "echo-actor", 5*time.Second)
 	if err != nil {
 		log.Printf("error: %v\n", err)

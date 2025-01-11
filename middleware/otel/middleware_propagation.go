@@ -5,11 +5,10 @@ import (
 	"github.com/asynkron/protoactor-go/actor/middleware/propagator"
 )
 
-func TracingMiddleware() actor.SpawnMiddleware {
+func RootContextSpawnMiddleware() actor.SpawnMiddleware {
 	return propagator.New().
 		WithItselfForwarded().
-		WithSenderMiddleware(SenderMiddleware()).
-		WithReceiverMiddleware(ReceiverMiddleware()).
-		WithSpawnMiddleware(SpawnMiddleware()).
+		WithSpawnMiddleware(rootActorSpawnMiddleware()).
+		WithContextDecorator(ContextDecorator()).
 		SpawnMiddleware
 }

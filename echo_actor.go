@@ -3,6 +3,7 @@ package playground
 import (
 	"github.com/asynkron/protoactor-go/actor"
 	"github.com/asynkron/protoactor-go/cluster"
+	otelmiddleware "github.com/ryota0624/protoactor-go-playground/middleware/otel"
 	"github.com/ryota0624/protoactor-go-playground/proto/gen/echo"
 	"log"
 	"time"
@@ -26,9 +27,17 @@ func (a *EchoActor) ReceiveDefault(ctx cluster.GrainContext) {
 }
 
 func (a *EchoActor) SayMessage(req *echo.Say, ctx cluster.GrainContext) (*echo.SayResponse, error) {
-	/// TODO: send message to echo actor
-	log.Printf("echo actor received: %s\n", req.Message)
-	return &echo.SayResponse{Message: req.Message}, nil
+
+	helloGrainResponse, err := ctx.Cluster().RequestFuture(ctx.Identity(), echo.GetEchoKind().Kind, req, cluster.WithContext(ctx.ActorSystem().Root.Copy().WithSenderMiddleware(otelmiddleware.RootContextSenderMiddleware())))
+
+	if err != nil {
+		return nil, err
+	}
+	result, err := helloGrainResponse.Result()
+	if err != nil {
+		return nil, err
+	}
+	return result.(*echo.SayResponse), nil
 }
 
 type Say struct {
@@ -45,6 +54,8 @@ func (*EchoActor) Receive(context actor.Context) {
 		log.Printf("echo actor received: %s\n", msg.Message)
 		context.Respond(&echo.SayResponse{Message: msg.Message + "-response"})
 	case Say:
+		log.Printf("echo actor received: %s %s \n", msg.Message, context.Self())
+
 		if msg.Message == "hello" {
 			//go func() {
 			<-time.NewTimer(1 * time.Second).C
@@ -52,9 +63,8 @@ func (*EchoActor) Receive(context actor.Context) {
 				return &EchoActor{}
 			}), "child-echo-actor")
 			if err != nil {
-				log.Printf("error: %v\n", err)
+				log.Printf("spawn child error: %v\n", err)
 			}
-
 			context.Request(pid, Say{Message: "world"})
 			//}()
 		}
